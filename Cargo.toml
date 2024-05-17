@@ -24,3 +24,7 @@ ckb-resource = "0.116.1"
 ckb-verification = "0.116.1"
 ckb-traits = "0.116.1"
 ckb-mock-tx-types = "0.116.1"
+
+[dev-dependencies]
+anyhow = "1.0"
+ckb-system-scripts = "0.5"
