@@ -464,6 +464,7 @@ checksum = "d4dc9b70fa7a9ecb0cf285cadab32139c58be9fee08b94e019b15d6b3f5296ef"
 name = "ckb-testtool"
 version = "0.12.0"
 dependencies = [
+ "anyhow",
  "ckb-always-success-script",
  "ckb-chain-spec",
  "ckb-crypto",
@@ -473,6 +474,7 @@ dependencies = [
  "ckb-mock-tx-types",
  "ckb-resource",
  "ckb-script",
+ "ckb-system-scripts",
  "ckb-traits",
  "ckb-types",
  "ckb-verification",
