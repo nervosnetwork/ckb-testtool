@@ -568,6 +568,37 @@ impl Context {
         }
         .into())
     }
+
+    pub fn load_binary(&mut self, path: &std::path::PathBuf) -> Bytes {
+        let result = std::fs::read(&path);
+        if result.is_err() {
+            panic!("Binary {:?} is missing!", path);
+        }
+        let result: Bytes = result.unwrap().into();
+
+        #[cfg(feature = "simulator")]
+        {
+            let sim_path = path
+                .parent()
+                .unwrap_or(&std::path::PathBuf::default())
+                .join(
+                    format!(
+                        "lib{}_dbg.{}",
+                        path.file_name().unwrap().to_str().unwrap(),
+                        std::env::consts::DLL_EXTENSION
+                    )
+                    .replace("-", "_"),
+                );
+            if sim_path.is_file() {
+                let code_hash = CellOutput::calc_data_hash(&result);
+                println!("=== dbg code hash1 : {}", code_hash);
+                self.simulator_hash_map
+                    .insert(code_hash, sim_path.to_str().unwrap().to_string());
+            }
+        };
+
+        result
+    }
 }
 
 impl CellDataProvider for Context {
