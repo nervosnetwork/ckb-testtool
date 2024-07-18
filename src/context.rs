@@ -591,7 +591,6 @@ impl Context {
                 );
             if sim_path.is_file() {
                 let code_hash = CellOutput::calc_data_hash(&result);
-                println!("=== dbg code hash1 : {}", code_hash);
                 self.simulator_hash_map
                     .insert(code_hash, sim_path.to_str().unwrap().to_string());
             }
