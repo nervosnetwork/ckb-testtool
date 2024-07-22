@@ -474,10 +474,20 @@ impl Context {
             };
 
             for (hash, group) in verifier.groups() {
-                let code_hash = group.script.code_hash();
-                group.script.hash_type();
+                let code_hash = if group.script.hash_type() == ScriptHashType::Type.into() {
+                    let code_hash = group.script.code_hash();
+                    let out_point = match self.cells_by_type_hash.get(&code_hash) {
+                        Some(out_point) => out_point,
+                        None => panic!("unknow code hash(ScriptHashType::Type)"),
+                    };
 
-                // find code script
+                    match self.cells.get(out_point) {
+                        Some((_cell, bin)) => CellOutput::calc_data_hash(bin),
+                        None => panic!("unknow code hash(ScriptHashType::Type) in deps"),
+                    }
+                } else {
+                    group.script.code_hash()
+                };
 
                 let use_cycles = match self.simulator_hash_map.get(&code_hash) {
                     Some(sim_path) => {
