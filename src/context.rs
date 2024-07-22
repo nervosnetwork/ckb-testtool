@@ -455,22 +455,38 @@ impl Context {
 
             let mut cycles: Cycle = 0;
             let mut index = 0;
+            let tmp_dir = if !self.simulator_hash_map.is_empty() {
+                let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
+                if !tmp_dir.exists() {
+                    std::fs::create_dir(tmp_dir.clone())
+                        .expect("create tmp dir: ckb-simulator-debugger");
+                }
+                let tx_file: std::path::PathBuf = tmp_dir.join("ckb_running_tx.json");
+                let dump_tx = self.dump_tx(&tx)?;
+
+                let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
+                std::fs::write(&tx_file, tx_json).expect("write setup");
+
+                std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+                Some(tmp_dir)
+            } else {
+                None
+            };
+
             for (hash, group) in verifier.groups() {
                 let code_hash = group.script.code_hash();
+                group.script.hash_type();
+
+                // find code script
+
                 let use_cycles = match self.simulator_hash_map.get(&code_hash) {
                     Some(sim_path) => {
-                        //
                         println!(
                             "run simulator: {}",
                             sim_path.file_name().unwrap().to_str().unwrap()
                         );
-                        let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
-                        if !tmp_dir.exists() {
-                            std::fs::create_dir(tmp_dir.clone())
-                                .expect("create tmp dir: ckb-simulator-debugger");
-                        }
-
-                        let running_setup = tmp_dir.join("ckb_running_setup.json");
+                        let running_setup =
+                            tmp_dir.as_ref().unwrap().join("ckb_running_setup.json");
 
                         let setup = format!(
                             "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {{}} }}",
@@ -479,14 +495,6 @@ impl Context {
                         );
                         std::fs::write(&running_setup, setup).expect("write setup");
                         std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
-
-                        let tx_file = tmp_dir.join("ckb_running_tx.json");
-                        let dump_tx = self.dump_tx(&tx)?;
-
-                        let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
-                        std::fs::write(&tx_file, tx_json).expect("write setup");
-
-                        std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
 
                         unsafe {
                             if let Ok(lib) = libloading::Library::new(sim_path) {
