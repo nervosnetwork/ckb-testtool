@@ -50,7 +50,7 @@ pub struct Message {
 }
 
 /// Verification Context
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Context {
     pub cells: HashMap<OutPoint, (CellOutput, Bytes)>,
     pub transaction_infos: HashMap<OutPoint, TransactionInfo>,
@@ -61,6 +61,45 @@ pub struct Context {
     pub cells_by_type_hash: HashMap<Byte32, OutPoint>,
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
+    #[cfg(feature = "simulator")]
+    simulator_hash_map: HashMap<Byte32, std::path::PathBuf>,
+    contracts_dir: std::path::PathBuf,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        use std::env;
+        use std::path::PathBuf;
+        // Get from $TOP/$MODE
+        let contracts_dir = env::var("TOP")
+            .map(|f| PathBuf::from(f))
+            .unwrap_or({
+                let mut base_path = PathBuf::new();
+                base_path.push("build");
+                if !base_path.exists() {
+                    base_path.pop();
+                    base_path.push("..");
+                    base_path.push("build");
+                }
+                base_path
+            })
+            .join(env::var("MODE").unwrap_or("release".to_string()));
+
+        Self {
+            cells: Default::default(),
+            transaction_infos: Default::default(),
+            headers: Default::default(),
+            epoches: Default::default(),
+            block_extensions: Default::default(),
+            cells_by_data_hash: Default::default(),
+            cells_by_type_hash: Default::default(),
+            capture_debug: Default::default(),
+            captured_messages: Default::default(),
+            #[cfg(feature = "simulator")]
+            simulator_hash_map: Default::default(),
+            contracts_dir,
+        }
+    }
 }
 
 impl Context {
@@ -100,6 +139,26 @@ impl Context {
         self.cells_by_type_hash
             .insert(type_id_hash, out_point.clone());
         out_point
+    }
+
+    pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
+        let path = self.contracts_dir.join(filename);
+        let data = std::fs::read(path).expect("read local file");
+
+        #[cfg(feature = "simulator")]
+        {
+            let native_path = self.contracts_dir.join(format!(
+                "lib{}_dbg.{}",
+                filename.replace("-", "_"),
+                std::env::consts::DLL_EXTENSION
+            ));
+            if native_path.is_file() {
+                let code_hash = CellOutput::calc_data_hash(&data);
+                self.simulator_hash_map.insert(code_hash, native_path);
+            }
+        }
+
+        self.deploy_cell(data.into())
     }
 
     /// Insert a block header into context
@@ -386,7 +445,107 @@ impl Context {
                 println!("[contract debug] {}", msg);
             });
         }
+
+        #[cfg(feature = "simulator")]
+        {
+            use core::ffi::c_int;
+            pub struct Arg(());
+            type CkbMainFunc<'a> =
+                libloading::Symbol<'a, unsafe extern "C" fn(argc: c_int, argv: *const Arg) -> i8>;
+
+            let mut cycles: Cycle = 0;
+            let mut index = 0;
+            let tmp_dir = if !self.simulator_hash_map.is_empty() {
+                let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
+                if !tmp_dir.exists() {
+                    std::fs::create_dir(tmp_dir.clone())
+                        .expect("create tmp dir: ckb-simulator-debugger");
+                }
+                let tx_file: std::path::PathBuf = tmp_dir.join("ckb_running_tx.json");
+                let dump_tx = self.dump_tx(&tx)?;
+
+                let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
+                std::fs::write(&tx_file, tx_json).expect("write setup");
+
+                std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+                Some(tmp_dir)
+            } else {
+                None
+            };
+
+            for (hash, group) in verifier.groups() {
+                let code_hash = if group.script.hash_type() == ScriptHashType::Type.into() {
+                    let code_hash = group.script.code_hash();
+                    let out_point = match self.cells_by_type_hash.get(&code_hash) {
+                        Some(out_point) => out_point,
+                        None => panic!("unknow code hash(ScriptHashType::Type)"),
+                    };
+
+                    match self.cells.get(out_point) {
+                        Some((_cell, bin)) => CellOutput::calc_data_hash(bin),
+                        None => panic!("unknow code hash(ScriptHashType::Type) in deps"),
+                    }
+                } else {
+                    group.script.code_hash()
+                };
+
+                let use_cycles = match self.simulator_hash_map.get(&code_hash) {
+                    Some(sim_path) => {
+                        println!(
+                            "run simulator: {}",
+                            sim_path.file_name().unwrap().to_str().unwrap()
+                        );
+                        let running_setup =
+                            tmp_dir.as_ref().unwrap().join("ckb_running_setup.json");
+
+                        let setup = format!(
+                            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {{}} }}",
+                            group.group_type == ckb_script::ScriptGroupType::Lock,
+                            index,
+                        );
+                        std::fs::write(&running_setup, setup).expect("write setup");
+                        std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
+
+                        unsafe {
+                            if let Ok(lib) = libloading::Library::new(sim_path) {
+                                if let Ok(func) = lib.get(b"__ckb_std_main") {
+                                    let func: CkbMainFunc = func;
+                                    let rc = { func(0, [].as_ptr()) };
+                                    assert!(rc == 0, "run simulator failed");
+                                }
+                            }
+                        }
+                        index += 1;
+                        0
+                    }
+                    None => {
+                        index += 1;
+                        group.script.code_hash();
+                        verifier
+                            .verify_single(group.group_type, hash, max_cycles)
+                            .map_err(|e| {
+                                #[cfg(feature = "logging")]
+                                logging::on_script_error(_hash, &self.hash(), &e);
+                                e.source(group)
+                            })?
+                    }
+                };
+                let r = cycles.overflowing_add(use_cycles);
+                assert!(!r.1, "cycles overflow");
+                cycles = r.0;
+            }
+            Ok(cycles)
+        }
+
+        #[cfg(not(feature = "simulator"))]
         verifier.verify(max_cycles)
+    }
+
+    #[cfg(feature = "simulator")]
+    pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
+        let path = std::path::PathBuf::from(path);
+        assert!(path.is_file());
+        self.simulator_hash_map.insert(code_hash, path);
     }
 
     /// Dump the transaction in mock transaction format, so we can offload it to ckb debugger
@@ -414,7 +573,7 @@ impl Context {
                     .build(),
                 output: dep.cell_output.clone(),
                 data: dep.mem_cell_data.clone().unwrap(),
-                header: None,
+                header: dep.transaction_info.clone().map(|info| info.block_hash),
             });
         }
         for dep in rtx.resolved_dep_groups.iter() {
@@ -425,7 +584,7 @@ impl Context {
                     .build(),
                 output: dep.cell_output.clone(),
                 data: dep.mem_cell_data.clone().unwrap(),
-                header: None,
+                header: dep.transaction_info.clone().map(|info| info.block_hash),
             });
         }
         let mut header_deps = Vec::with_capacity(rtx.transaction.header_deps().len());
