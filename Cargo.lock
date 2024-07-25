@@ -478,6 +478,7 @@ dependencies = [
  "ckb-traits",
  "ckb-types",
  "ckb-verification",
+ "faster-hex",
  "lazy_static",
  "libloading",
  "rand 0.8.5",

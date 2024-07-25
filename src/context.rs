@@ -62,7 +62,7 @@ pub struct Context {
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
     #[cfg(feature = "simulator")]
-    simulator_hash_map: HashMap<Byte32, std::path::PathBuf>,
+    simulator_binaries: HashMap<Byte32, std::path::PathBuf>,
     contracts_dir: std::path::PathBuf,
 }
 
@@ -96,7 +96,7 @@ impl Default for Context {
             capture_debug: Default::default(),
             captured_messages: Default::default(),
             #[cfg(feature = "simulator")]
-            simulator_hash_map: Default::default(),
+            simulator_binaries: Default::default(),
             contracts_dir,
         }
     }
@@ -154,7 +154,7 @@ impl Context {
             ));
             if native_path.is_file() {
                 let code_hash = CellOutput::calc_data_hash(&data);
-                self.simulator_hash_map.insert(code_hash, native_path);
+                self.simulator_binaries.insert(code_hash, native_path);
             }
         }
 
@@ -454,8 +454,7 @@ impl Context {
                 libloading::Symbol<'a, unsafe extern "C" fn(argc: c_int, argv: *const Arg) -> i8>;
 
             let mut cycles: Cycle = 0;
-            let mut index = 0;
-            let tmp_dir = if !self.simulator_hash_map.is_empty() {
+            let tmp_dir = if !self.simulator_binaries.is_empty() {
                 let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
                 if !tmp_dir.exists() {
                     std::fs::create_dir(tmp_dir.clone())
@@ -471,6 +470,29 @@ impl Context {
                 Some(tmp_dir)
             } else {
                 None
+            };
+
+            let native_binaries = {
+                let mut s = String::new();
+
+                for (code_hash, path) in &self.simulator_binaries {
+                    let buf = vec![
+                        code_hash.as_bytes().to_vec(),
+                        vec![0xff],
+                        0u32.to_le_bytes().to_vec(),
+                        0u32.to_le_bytes().to_vec(),
+                    ]
+                    .concat();
+
+                    s += &format!(
+                        "\"0x{}\" : \"{}\",",
+                        faster_hex::hex_string(&buf),
+                        path.to_str().unwrap()
+                    );
+                }
+                s.pop();
+
+                format!("{{ {} }}", s)
             };
 
             for (hash, group) in verifier.groups() {
@@ -489,7 +511,7 @@ impl Context {
                     group.script.code_hash()
                 };
 
-                let use_cycles = match self.simulator_hash_map.get(&code_hash) {
+                let use_cycles = match self.simulator_binaries.get(&code_hash) {
                     Some(sim_path) => {
                         println!(
                             "run simulator: {}",
@@ -499,10 +521,11 @@ impl Context {
                             tmp_dir.as_ref().unwrap().join("ckb_running_setup.json");
 
                         let setup = format!(
-                            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {{}} }}",
+                            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
                             group.group_type == ckb_script::ScriptGroupType::Lock,
-                            index,
+                            group.input_indices[0], native_binaries
                         );
+                        println!("---- setup: {}", &setup);
                         std::fs::write(&running_setup, setup).expect("write setup");
                         std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
 
@@ -515,11 +538,9 @@ impl Context {
                                 }
                             }
                         }
-                        index += 1;
                         0
                     }
                     None => {
-                        index += 1;
                         group.script.code_hash();
                         verifier
                             .verify_single(group.group_type, hash, max_cycles)
@@ -545,7 +566,7 @@ impl Context {
     pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
         let path = std::path::PathBuf::from(path);
         assert!(path.is_file());
-        self.simulator_hash_map.insert(code_hash, path);
+        self.simulator_binaries.insert(code_hash, path);
     }
 
     /// Dump the transaction in mock transaction format, so we can offload it to ckb debugger
