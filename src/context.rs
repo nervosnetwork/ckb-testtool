@@ -70,20 +70,17 @@ impl Default for Context {
     fn default() -> Self {
         use std::env;
         use std::path::PathBuf;
-        // Get from $TOP/$MODE
-        let contracts_dir = env::var("TOP")
+        // Get from $TOP/build/$MODE
+        let mut contracts_dir = env::var("TOP")
             .map(|f| PathBuf::from(f))
-            .unwrap_or({
-                let mut base_path = PathBuf::new();
-                base_path.push("build");
-                if !base_path.exists() {
-                    base_path.pop();
-                    base_path.push("..");
-                    base_path.push("build");
-                }
-                base_path
-            })
-            .join(env::var("MODE").unwrap_or("release".to_string()));
+            .unwrap_or_default();
+
+        contracts_dir.push("build");
+        if !contracts_dir.exists() {
+            contracts_dir.pop();
+            contracts_dir.push("../build");
+        }
+        let contracts_dir = contracts_dir.join(env::var("MODE").unwrap_or("release".to_string()));
 
         Self {
             cells: Default::default(),
@@ -143,7 +140,7 @@ impl Context {
 
     pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
         let path = self.contracts_dir.join(filename);
-        let data = std::fs::read(path).expect("read local file");
+        let data = std::fs::read(&path).expect(&format!("read local file: {:?}", path));
 
         #[cfg(feature = "simulator")]
         {
@@ -472,10 +469,10 @@ impl Context {
                 None
             };
 
-            let native_binaries = {
-                let mut s = String::new();
-
-                for (code_hash, path) in &self.simulator_binaries {
+            let mut native_binaries = self
+                .simulator_binaries
+                .iter()
+                .map(|(code_hash, path)| {
                     let buf = vec![
                         code_hash.as_bytes().to_vec(),
                         vec![0xff],
@@ -484,16 +481,19 @@ impl Context {
                     ]
                     .concat();
 
-                    s += &format!(
+                    format!(
                         "\"0x{}\" : \"{}\",",
                         faster_hex::hex_string(&buf),
                         path.to_str().unwrap()
-                    );
-                }
-                s.pop();
+                    )
+                })
+                .collect::<Vec<String>>()
+                .concat();
+            if !native_binaries.is_empty() {
+                native_binaries.pop();
+            }
 
-                format!("{{ {} }}", s)
-            };
+            let native_binaries = format!("{{ {} }}", native_binaries);
 
             for (hash, group) in verifier.groups() {
                 let code_hash = if group.script.hash_type() == ScriptHashType::Type.into() {
