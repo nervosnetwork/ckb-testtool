@@ -62,7 +62,7 @@ pub struct Context {
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
     #[cfg(feature = "simulator")]
-    simulator_hash_map: HashMap<Byte32, std::path::PathBuf>,
+    simulator_binaries: HashMap<Byte32, std::path::PathBuf>,
     contracts_dir: std::path::PathBuf,
 }
 
@@ -70,20 +70,17 @@ impl Default for Context {
     fn default() -> Self {
         use std::env;
         use std::path::PathBuf;
-        // Get from $TOP/$MODE
-        let contracts_dir = env::var("TOP")
+        // Get from $TOP/build/$MODE
+        let mut contracts_dir = env::var("TOP")
             .map(|f| PathBuf::from(f))
-            .unwrap_or({
-                let mut base_path = PathBuf::new();
-                base_path.push("build");
-                if !base_path.exists() {
-                    base_path.pop();
-                    base_path.push("..");
-                    base_path.push("build");
-                }
-                base_path
-            })
-            .join(env::var("MODE").unwrap_or("release".to_string()));
+            .unwrap_or_default();
+
+        contracts_dir.push("build");
+        if !contracts_dir.exists() {
+            contracts_dir.pop();
+            contracts_dir.push("../build");
+        }
+        let contracts_dir = contracts_dir.join(env::var("MODE").unwrap_or("release".to_string()));
 
         Self {
             cells: Default::default(),
@@ -96,7 +93,7 @@ impl Default for Context {
             capture_debug: Default::default(),
             captured_messages: Default::default(),
             #[cfg(feature = "simulator")]
-            simulator_hash_map: Default::default(),
+            simulator_binaries: Default::default(),
             contracts_dir,
         }
     }
@@ -143,7 +140,7 @@ impl Context {
 
     pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
         let path = self.contracts_dir.join(filename);
-        let data = std::fs::read(path).expect("read local file");
+        let data = std::fs::read(&path).expect(&format!("read local file: {:?}", path));
 
         #[cfg(feature = "simulator")]
         {
@@ -154,7 +151,7 @@ impl Context {
             ));
             if native_path.is_file() {
                 let code_hash = CellOutput::calc_data_hash(&data);
-                self.simulator_hash_map.insert(code_hash, native_path);
+                self.simulator_binaries.insert(code_hash, native_path);
             }
         }
 
@@ -454,8 +451,7 @@ impl Context {
                 libloading::Symbol<'a, unsafe extern "C" fn(argc: c_int, argv: *const Arg) -> i8>;
 
             let mut cycles: Cycle = 0;
-            let mut index = 0;
-            let tmp_dir = if !self.simulator_hash_map.is_empty() {
+            let tmp_dir = if !self.simulator_binaries.is_empty() {
                 let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
                 if !tmp_dir.exists() {
                     std::fs::create_dir(tmp_dir.clone())
@@ -473,6 +469,32 @@ impl Context {
                 None
             };
 
+            let mut native_binaries = self
+                .simulator_binaries
+                .iter()
+                .map(|(code_hash, path)| {
+                    let buf = vec![
+                        code_hash.as_bytes().to_vec(),
+                        vec![0xff],
+                        0u32.to_le_bytes().to_vec(),
+                        0u32.to_le_bytes().to_vec(),
+                    ]
+                    .concat();
+
+                    format!(
+                        "\"0x{}\" : \"{}\",",
+                        faster_hex::hex_string(&buf),
+                        path.to_str().unwrap()
+                    )
+                })
+                .collect::<Vec<String>>()
+                .concat();
+            if !native_binaries.is_empty() {
+                native_binaries.pop();
+            }
+
+            let native_binaries = format!("{{ {} }}", native_binaries);
+
             for (hash, group) in verifier.groups() {
                 let code_hash = if group.script.hash_type() == ScriptHashType::Type.into() {
                     let code_hash = group.script.code_hash();
@@ -489,7 +511,7 @@ impl Context {
                     group.script.code_hash()
                 };
 
-                let use_cycles = match self.simulator_hash_map.get(&code_hash) {
+                let use_cycles = match self.simulator_binaries.get(&code_hash) {
                     Some(sim_path) => {
                         println!(
                             "run simulator: {}",
@@ -499,10 +521,11 @@ impl Context {
                             tmp_dir.as_ref().unwrap().join("ckb_running_setup.json");
 
                         let setup = format!(
-                            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {{}} }}",
+                            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
                             group.group_type == ckb_script::ScriptGroupType::Lock,
-                            index,
+                            group.input_indices[0], native_binaries
                         );
+                        println!("---- setup: {}", &setup);
                         std::fs::write(&running_setup, setup).expect("write setup");
                         std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
 
@@ -515,11 +538,9 @@ impl Context {
                                 }
                             }
                         }
-                        index += 1;
                         0
                     }
                     None => {
-                        index += 1;
                         group.script.code_hash();
                         verifier
                             .verify_single(group.group_type, hash, max_cycles)
@@ -545,7 +566,7 @@ impl Context {
     pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
         let path = std::path::PathBuf::from(path);
         assert!(path.is_file());
-        self.simulator_hash_map.insert(code_hash, path);
+        self.simulator_binaries.insert(code_hash, path);
     }
 
     /// Dump the transaction in mock transaction format, so we can offload it to ckb debugger
