@@ -462,7 +462,7 @@ checksum = "d4dc9b70fa7a9ecb0cf285cadab32139c58be9fee08b94e019b15d6b3f5296ef"
 
 [[package]]
 name = "ckb-testtool"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "ckb-always-success-script",
