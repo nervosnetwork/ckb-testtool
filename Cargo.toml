@@ -10,7 +10,7 @@ repository = "https://github.com/nervosnetwork/capsule"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-simulator = [ "libloading", "serde_json" ]
+native-simulator = [ "libloading", "serde_json" ]
 
 [dependencies]
 ckb-always-success-script = "0.0.1"
