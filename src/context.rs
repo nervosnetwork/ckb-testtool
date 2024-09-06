@@ -61,7 +61,7 @@ pub struct Context {
     pub cells_by_type_hash: HashMap<Byte32, OutPoint>,
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
-    #[cfg(feature = "simulator")]
+    #[cfg(feature = "native-simulator")]
     simulator_binaries: HashMap<Byte32, std::path::PathBuf>,
     contracts_dir: std::path::PathBuf,
 }
@@ -92,7 +92,7 @@ impl Default for Context {
             cells_by_type_hash: Default::default(),
             capture_debug: Default::default(),
             captured_messages: Default::default(),
-            #[cfg(feature = "simulator")]
+            #[cfg(feature = "native-simulator")]
             simulator_binaries: Default::default(),
             contracts_dir,
         }
@@ -142,7 +142,7 @@ impl Context {
         let path = self.contracts_dir.join(filename);
         let data = std::fs::read(&path).expect(&format!("read local file: {:?}", path));
 
-        #[cfg(feature = "simulator")]
+        #[cfg(feature = "native-simulator")]
         {
             let native_path = self.contracts_dir.join(format!(
                 "lib{}_dbg.{}",
@@ -443,7 +443,7 @@ impl Context {
             });
         }
 
-        #[cfg(feature = "simulator")]
+        #[cfg(feature = "native-simulator")]
         {
             use core::ffi::c_int;
             pub struct Arg(());
@@ -514,7 +514,7 @@ impl Context {
                 let use_cycles = match self.simulator_binaries.get(&code_hash) {
                     Some(sim_path) => {
                         println!(
-                            "run simulator: {}",
+                            "run native-simulator: {}",
                             sim_path.file_name().unwrap().to_str().unwrap()
                         );
                         let running_setup =
@@ -534,7 +534,7 @@ impl Context {
                                 if let Ok(func) = lib.get(b"__ckb_std_main") {
                                     let func: CkbMainFunc = func;
                                     let rc = { func(0, [].as_ptr()) };
-                                    assert!(rc == 0, "run simulator failed");
+                                    assert!(rc == 0, "run native-simulator failed");
                                 }
                             }
                         }
@@ -558,11 +558,11 @@ impl Context {
             Ok(cycles)
         }
 
-        #[cfg(not(feature = "simulator"))]
+        #[cfg(not(feature = "native-simulator"))]
         verifier.verify(max_cycles)
     }
 
-    #[cfg(feature = "simulator")]
+    #[cfg(feature = "native-simulator")]
     pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
         let path = std::path::PathBuf::from(path);
         assert!(path.is_file());
