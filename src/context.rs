@@ -17,6 +17,7 @@ use ckb_types::{
 };
 use rand::{thread_rng, Rng};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Return a random hash
@@ -61,15 +62,16 @@ pub struct Context {
     pub cells_by_type_hash: HashMap<Byte32, OutPoint>,
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
+    contracts_dirs: Vec<PathBuf>,
     #[cfg(feature = "native-simulator")]
-    simulator_binaries: HashMap<Byte32, std::path::PathBuf>,
-    contracts_dir: std::path::PathBuf,
+    simulator_binaries: HashMap<Byte32, PathBuf>,
+    #[cfg(feature = "native-simulator")]
+    simulator_bin_name: String,
 }
 
 impl Default for Context {
     fn default() -> Self {
         use std::env;
-        use std::path::PathBuf;
         // Get from $TOP/build/$MODE
         let mut contracts_dir = env::var("TOP").map(PathBuf::from).unwrap_or_default();
 
@@ -90,14 +92,20 @@ impl Default for Context {
             cells_by_type_hash: Default::default(),
             capture_debug: Default::default(),
             captured_messages: Default::default(),
+            contracts_dirs: vec![contracts_dir],
             #[cfg(feature = "native-simulator")]
             simulator_binaries: Default::default(),
-            contracts_dir,
+            #[cfg(feature = "native-simulator")]
+            simulator_bin_name: "lib<contract>_sim".to_string(),
         }
     }
 }
 
 impl Context {
+    pub fn add_contract_dir(&mut self, path: &str) {
+        self.contracts_dirs.push(path.into());
+    }
+
     #[deprecated(since = "0.1.1", note = "Please use the deploy_cell function instead")]
     pub fn deploy_contract(&mut self, data: Bytes) -> OutPoint {
         self.deploy_cell(data)
@@ -137,23 +145,48 @@ impl Context {
     }
 
     pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
-        let path = self.contracts_dir.join(filename);
+        let path = self.get_contract_path(filename).expect("get contract path");
         let data = std::fs::read(&path).unwrap_or_else(|_| panic!("read local file: {:?}", path));
 
         #[cfg(feature = "native-simulator")]
         {
-            let native_path = self.contracts_dir.join(format!(
-                "lib{}_dbg.{}",
-                filename.replace("-", "_"),
-                std::env::consts::DLL_EXTENSION
-            ));
-            if native_path.is_file() {
+            let native_path = self.get_native_simulator_path(filename);
+            if native_path.is_some() {
                 let code_hash = CellOutput::calc_data_hash(&data);
-                self.simulator_binaries.insert(code_hash, native_path);
+                self.simulator_binaries
+                    .insert(code_hash, native_path.unwrap());
             }
         }
 
         self.deploy_cell(data.into())
+    }
+
+    fn get_contract_path(&self, filename: &str) -> Option<PathBuf> {
+        for dir in &self.contracts_dirs {
+            let path = dir.join(filename);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "native-simulator")]
+    fn get_native_simulator_path(&self, filename: &str) -> Option<PathBuf> {
+        let cdylib_name = format!(
+            "{}.{}",
+            self.simulator_bin_name
+                .replace("<contract>", &filename.replace("-", "_")),
+            std::env::consts::DLL_EXTENSION
+        );
+        for dir in &self.contracts_dirs {
+            let path = dir.join(&cdylib_name);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        None
     }
 
     /// Insert a block header into context
@@ -455,7 +488,7 @@ impl Context {
                     std::fs::create_dir(tmp_dir.clone())
                         .expect("create tmp dir: ckb-simulator-debugger");
                 }
-                let tx_file: std::path::PathBuf = tmp_dir.join("ckb_running_tx.json");
+                let tx_file: PathBuf = tmp_dir.join("ckb_running_tx.json");
                 let dump_tx = self.dump_tx(&tx)?;
 
                 let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
@@ -543,8 +576,8 @@ impl Context {
                         verifier
                             .verify_single(group.group_type, hash, max_cycles)
                             .map_err(|e| {
-                                #[cfg(feature = "logging")]
-                                logging::on_script_error(_hash, &self.hash(), &e);
+                                // #[cfg(feature = "logging")]
+                                // logging::on_script_error(_hash, &self.hash(), &e);
                                 e.source(group)
                             })?
                     }
@@ -562,7 +595,7 @@ impl Context {
 
     #[cfg(feature = "native-simulator")]
     pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
-        let path = std::path::PathBuf::from(path);
+        let path = PathBuf::from(path);
         assert!(path.is_file());
         self.simulator_binaries.insert(code_hash, path);
     }
