@@ -71,9 +71,7 @@ impl Default for Context {
         use std::env;
         use std::path::PathBuf;
         // Get from $TOP/build/$MODE
-        let mut contracts_dir = env::var("TOP")
-            .map(|f| PathBuf::from(f))
-            .unwrap_or_default();
+        let mut contracts_dir = env::var("TOP").map(PathBuf::from).unwrap_or_default();
 
         contracts_dir.push("build");
         if !contracts_dir.exists() {
@@ -140,7 +138,7 @@ impl Context {
 
     pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
         let path = self.contracts_dir.join(filename);
-        let data = std::fs::read(&path).expect(&format!("read local file: {:?}", path));
+        let data = std::fs::read(&path).unwrap_or_else(|_| panic!("read local file: {:?}", path));
 
         #[cfg(feature = "native-simulator")]
         {
