@@ -610,10 +610,19 @@ impl Context {
 
         type CkbMainFunc<'a> =
             libloading::Symbol<'a, unsafe extern "C" fn(argc: i32, argv: *const *const i8) -> i8>;
+        type SetScriptInfo<'a> = libloading::Symbol<
+            'a,
+            unsafe extern "C" fn(ptr: *const std::ffi::c_void, tx_ctx_id: u64, vm_ctx_id: u64),
+        >;
 
         // ckb_x64_simulator::run_native_simulator(sim_path);
         unsafe {
             let lib = libloading::Library::new(sim_path).expect("Load library");
+
+            let func: SetScriptInfo = lib
+                .get(b"__set_script_info")
+                .expect("load function : __update_spawn_info");
+            func(std::ptr::null(), 0, 0);
 
             let func: CkbMainFunc = lib
                 .get(b"__ckb_std_main")
