@@ -148,3 +148,28 @@ fn test_sighash_all_unlock_data() {
 fn test_sighash_all_unlock_type() {
     test_sighash_all_unlock(ScriptHashType::Type);
 }
+
+#[test]
+fn test_deterministic_rng_context() {
+    let data = BUNDLED_CELL.get("specs/cells/secp256k1_data").unwrap();
+
+    let out_point_1 = {
+        let mut context = Context::default();
+        context.deploy_cell(data.to_vec().into())
+    };
+    let out_point_2 = {
+        let mut context = Context::default();
+        context.deploy_cell(data.to_vec().into())
+    };
+    assert_ne!(out_point_1, out_point_2);
+
+    let out_point_1 = {
+        let mut context = Context::new_with_deterministic_rng();
+        context.deploy_cell(data.to_vec().into())
+    };
+    let out_point_2 = {
+        let mut context = Context::new_with_deterministic_rng();
+        context.deploy_cell(data.to_vec().into())
+    };
+    assert_eq!(out_point_1, out_point_2);
+}
