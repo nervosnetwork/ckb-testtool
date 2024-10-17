@@ -15,7 +15,7 @@ use ckb_types::{
     packed::{Byte32, CellDep, CellDepBuilder, CellOutput, OutPoint, OutPointVec, Script},
     prelude::*,
 };
-use rand::{thread_rng, Rng};
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -59,6 +59,7 @@ pub struct Context {
     pub block_extensions: HashMap<Byte32, Bytes>,
     pub cells_by_data_hash: HashMap<Byte32, OutPoint>,
     pub cells_by_type_hash: HashMap<Byte32, OutPoint>,
+    deterministic_rng: bool,
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
     #[cfg(feature = "native-simulator")]
@@ -88,6 +89,7 @@ impl Default for Context {
             block_extensions: Default::default(),
             cells_by_data_hash: Default::default(),
             cells_by_type_hash: Default::default(),
+            deterministic_rng: false,
             capture_debug: Default::default(),
             captured_messages: Default::default(),
             #[cfg(feature = "native-simulator")]
@@ -98,6 +100,14 @@ impl Default for Context {
 }
 
 impl Context {
+    /// Create a new context with a deterministic random number generator, which can be used to generate deterministic out point of deployed contract
+    pub fn new_with_deterministic_rng() -> Self {
+        Self {
+            deterministic_rng: true,
+            ..Default::default()
+        }
+    }
+
     #[deprecated(since = "0.1.1", note = "Please use the deploy_cell function instead")]
     pub fn deploy_contract(&mut self, data: Bytes) -> OutPoint {
         self.deploy_cell(data)
@@ -111,14 +121,23 @@ impl Context {
             // contract has been deployed
             return out_point.to_owned();
         }
-        let mut rng = thread_rng();
-        let tx_hash = {
-            let mut buf = [0u8; 32];
-            rng.fill(&mut buf);
-            buf.pack()
+        let (out_point, type_id_script) = if self.deterministic_rng {
+            let mut rng = StdRng::from_seed(data_hash.as_slice().try_into().unwrap());
+            let mut tx_hash = [0u8; 32];
+            rng.fill(&mut tx_hash);
+            let mut script_args = [0u8; 32];
+            rng.fill(&mut script_args);
+            (
+                OutPoint::new_builder().tx_hash(tx_hash.pack()).build(),
+                Script::new_builder()
+                    .code_hash(TYPE_ID_CODE_HASH.pack())
+                    .hash_type(ScriptHashType::Type.into())
+                    .args(script_args.as_slice().pack())
+                    .build(),
+            )
+        } else {
+            (random_out_point(), random_type_id_script())
         };
-        let out_point = OutPoint::new(tx_hash, 0);
-        let type_id_script = random_type_id_script();
         let type_id_hash = type_id_script.calc_script_hash();
         let cell = {
             let cell = CellOutput::new_builder()
