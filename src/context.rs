@@ -17,6 +17,7 @@ use ckb_types::{
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Return a random hash
@@ -62,15 +63,16 @@ pub struct Context {
     deterministic_rng: bool,
     capture_debug: bool,
     captured_messages: Arc<Mutex<Vec<Message>>>,
+    contracts_dirs: Vec<PathBuf>,
     #[cfg(feature = "native-simulator")]
-    simulator_binaries: HashMap<Byte32, std::path::PathBuf>,
-    contracts_dir: std::path::PathBuf,
+    simulator_binaries: HashMap<Byte32, PathBuf>,
+    #[cfg(feature = "native-simulator")]
+    simulator_bin_name: String,
 }
 
 impl Default for Context {
     fn default() -> Self {
         use std::env;
-        use std::path::PathBuf;
         // Get from $TOP/build/$MODE
         let mut contracts_dir = env::var("TOP").map(PathBuf::from).unwrap_or_default();
 
@@ -92,9 +94,11 @@ impl Default for Context {
             deterministic_rng: false,
             capture_debug: Default::default(),
             captured_messages: Default::default(),
+            contracts_dirs: vec![contracts_dir],
             #[cfg(feature = "native-simulator")]
             simulator_binaries: Default::default(),
-            contracts_dir,
+            #[cfg(feature = "native-simulator")]
+            simulator_bin_name: "lib<contract>_sim".to_string(),
         }
     }
 }
@@ -106,6 +110,9 @@ impl Context {
             deterministic_rng: true,
             ..Default::default()
         }
+    }
+    pub fn add_contract_dir(&mut self, path: &str) {
+        self.contracts_dirs.push(path.into());
     }
 
     #[deprecated(since = "0.1.1", note = "Please use the deploy_cell function instead")]
@@ -156,23 +163,48 @@ impl Context {
     }
 
     pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
-        let path = self.contracts_dir.join(filename);
+        let path = self.get_contract_path(filename).expect("get contract path");
         let data = std::fs::read(&path).unwrap_or_else(|_| panic!("read local file: {:?}", path));
 
         #[cfg(feature = "native-simulator")]
         {
-            let native_path = self.contracts_dir.join(format!(
-                "lib{}_dbg.{}",
-                filename.replace("-", "_"),
-                std::env::consts::DLL_EXTENSION
-            ));
-            if native_path.is_file() {
+            let native_path = self.get_native_simulator_path(filename);
+            if native_path.is_some() {
                 let code_hash = CellOutput::calc_data_hash(&data);
-                self.simulator_binaries.insert(code_hash, native_path);
+                self.simulator_binaries
+                    .insert(code_hash, native_path.unwrap());
             }
         }
 
         self.deploy_cell(data.into())
+    }
+
+    fn get_contract_path(&self, filename: &str) -> Option<PathBuf> {
+        for dir in &self.contracts_dirs {
+            let path = dir.join(filename);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "native-simulator")]
+    fn get_native_simulator_path(&self, filename: &str) -> Option<PathBuf> {
+        let cdylib_name = format!(
+            "{}.{}",
+            self.simulator_bin_name
+                .replace("<contract>", &filename.replace("-", "_")),
+            std::env::consts::DLL_EXTENSION
+        );
+        for dir in &self.contracts_dirs {
+            let path = dir.join(&cdylib_name);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        None
     }
 
     /// Insert a block header into context
@@ -462,126 +494,148 @@ impl Context {
 
         #[cfg(feature = "native-simulator")]
         {
-            use core::ffi::c_int;
-            pub struct Arg(());
-            type CkbMainFunc<'a> =
-                libloading::Symbol<'a, unsafe extern "C" fn(argc: c_int, argv: *const Arg) -> i8>;
-
-            let mut cycles: Cycle = 0;
-            let tmp_dir = if !self.simulator_binaries.is_empty() {
-                let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
-                if !tmp_dir.exists() {
-                    std::fs::create_dir(tmp_dir.clone())
-                        .expect("create tmp dir: ckb-simulator-debugger");
-                }
-                let tx_file: std::path::PathBuf = tmp_dir.join("ckb_running_tx.json");
-                let dump_tx = self.dump_tx(&tx)?;
-
-                let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
-                std::fs::write(&tx_file, tx_json).expect("write setup");
-
-                std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
-                Some(tmp_dir)
-            } else {
-                None
-            };
-
-            let mut native_binaries = self
-                .simulator_binaries
-                .iter()
-                .map(|(code_hash, path)| {
-                    let buf = vec![
-                        code_hash.as_bytes().to_vec(),
-                        vec![0xff],
-                        0u32.to_le_bytes().to_vec(),
-                        0u32.to_le_bytes().to_vec(),
-                    ]
-                    .concat();
-
-                    format!(
-                        "\"0x{}\" : \"{}\",",
-                        faster_hex::hex_string(&buf),
-                        path.to_str().unwrap()
-                    )
-                })
-                .collect::<Vec<String>>()
-                .concat();
-            if !native_binaries.is_empty() {
-                native_binaries.pop();
-            }
-
-            let native_binaries = format!("{{ {} }}", native_binaries);
-
-            for (hash, group) in verifier.groups() {
-                let code_hash = if group.script.hash_type() == ScriptHashType::Type.into() {
-                    let code_hash = group.script.code_hash();
-                    let out_point = match self.cells_by_type_hash.get(&code_hash) {
-                        Some(out_point) => out_point,
-                        None => panic!("unknow code hash(ScriptHashType::Type)"),
-                    };
-
-                    match self.cells.get(out_point) {
-                        Some((_cell, bin)) => CellOutput::calc_data_hash(bin),
-                        None => panic!("unknow code hash(ScriptHashType::Type) in deps"),
-                    }
-                } else {
-                    group.script.code_hash()
-                };
-
-                let use_cycles = match self.simulator_binaries.get(&code_hash) {
-                    Some(sim_path) => {
-                        println!(
-                            "run native-simulator: {}",
-                            sim_path.file_name().unwrap().to_str().unwrap()
-                        );
-                        let running_setup =
-                            tmp_dir.as_ref().unwrap().join("ckb_running_setup.json");
-
-                        let setup = format!(
-                            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": 1, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
-                            group.group_type == ckb_script::ScriptGroupType::Lock,
-                            group.input_indices[0], native_binaries
-                        );
-                        println!("---- setup: {}", &setup);
-                        std::fs::write(&running_setup, setup).expect("write setup");
-                        std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
-
-                        unsafe {
-                            if let Ok(lib) = libloading::Library::new(sim_path) {
-                                if let Ok(func) = lib.get(b"__ckb_std_main") {
-                                    let func: CkbMainFunc = func;
-                                    let rc = { func(0, [].as_ptr()) };
-                                    assert!(rc == 0, "run native-simulator failed");
-                                }
-                            }
-                        }
-                        0
-                    }
-                    None => {
-                        group.script.code_hash();
-                        verifier
-                            .verify_single(group.group_type, hash, max_cycles)
-                            .map_err(|e| {
-                                #[cfg(feature = "logging")]
-                                logging::on_script_error(_hash, &self.hash(), &e);
-                                e.source(group)
-                            })?
-                    }
-                };
-                let r = cycles.overflowing_add(use_cycles);
-                assert!(!r.1, "cycles overflow");
-                cycles = r.0;
-            }
-            Ok(cycles)
+            self.native_simulator_verify(tx, verifier, max_cycles)
         }
-
         #[cfg(not(feature = "native-simulator"))]
         verifier.verify(max_cycles)
     }
 
     #[cfg(feature = "native-simulator")]
+    fn native_simulator_verify<DL>(
+        &self,
+        tx: &TransactionView,
+        verifier: TransactionScriptsVerifier<DL>,
+        max_cycles: u64,
+    ) -> Result<Cycle, CKBError>
+    where
+        DL: CellDataProvider + HeaderProvider + ExtensionProvider + Send + Sync + Clone + 'static,
+    {
+        let mut cycles: Cycle = 0;
+
+        for (hash, group) in verifier.groups() {
+            let code_hash = if group.script.hash_type() == ScriptHashType::Type.into() {
+                let code_hash = group.script.code_hash();
+                let out_point = match self.cells_by_type_hash.get(&code_hash) {
+                    Some(out_point) => out_point,
+                    None => panic!("unknow code hash(ScriptHashType::Type)"),
+                };
+
+                match self.cells.get(out_point) {
+                    Some((_cell, bin)) => CellOutput::calc_data_hash(bin),
+                    None => panic!("unknow code hash(ScriptHashType::Type) in deps"),
+                }
+            } else {
+                group.script.code_hash()
+            };
+
+            let use_cycles = match self.simulator_binaries.get(&code_hash) {
+                Some(sim_path) => self.run_simulator(sim_path, tx, group),
+                None => {
+                    group.script.code_hash();
+                    verifier
+                        .verify_single(group.group_type, hash, max_cycles)
+                        .map_err(|e| e.source(group))?
+                }
+            };
+            let r = cycles.overflowing_add(use_cycles);
+            assert!(!r.1, "cycles overflow");
+            cycles = r.0;
+        }
+        Ok(cycles)
+    }
+
+    #[cfg(feature = "native-simulator")]
+    fn run_simulator(
+        &self,
+        sim_path: &PathBuf,
+        tx: &TransactionView,
+        group: &ckb_script::ScriptGroup,
+    ) -> u64 {
+        println!(
+            "run native-simulator: {}",
+            sim_path.file_name().unwrap().to_str().unwrap()
+        );
+        let tmp_dir = if !self.simulator_binaries.is_empty() {
+            let tmp_dir = std::env::temp_dir().join("ckb-simulator-debugger");
+            if !tmp_dir.exists() {
+                std::fs::create_dir(tmp_dir.clone())
+                    .expect("create tmp dir: ckb-simulator-debugger");
+            }
+            let tx_file: PathBuf = tmp_dir.join("ckb_running_tx.json");
+            let dump_tx = self.dump_tx(&tx).unwrap();
+
+            let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
+            std::fs::write(&tx_file, tx_json).expect("write setup");
+
+            std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+            Some(tmp_dir)
+        } else {
+            None
+        };
+        let running_setup = tmp_dir.as_ref().unwrap().join("ckb_running_setup.json");
+
+        let mut native_binaries = self
+            .simulator_binaries
+            .iter()
+            .map(|(code_hash, path)| {
+                let buf = vec![
+                    code_hash.as_bytes().to_vec(),
+                    vec![0xff],
+                    0u32.to_le_bytes().to_vec(),
+                    0u32.to_le_bytes().to_vec(),
+                ]
+                .concat();
+
+                format!(
+                    "\"0x{}\" : \"{}\",",
+                    faster_hex::hex_string(&buf),
+                    path.to_str().unwrap()
+                )
+            })
+            .collect::<Vec<String>>()
+            .concat();
+        if !native_binaries.is_empty() {
+            native_binaries.pop();
+        }
+
+        let native_binaries = format!("{{ {} }}", native_binaries);
+
+        let setup = format!(
+                "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": {}, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
+                group.group_type == ckb_script::ScriptGroupType::Lock,
+                group.input_indices[0], 2, native_binaries
+            );
+        std::fs::write(&running_setup, setup).expect("write setup");
+        std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
+
+        type CkbMainFunc<'a> =
+            libloading::Symbol<'a, unsafe extern "C" fn(argc: i32, argv: *const *const i8) -> i8>;
+        type SetScriptInfo<'a> = libloading::Symbol<
+            'a,
+            unsafe extern "C" fn(ptr: *const std::ffi::c_void, tx_ctx_id: u64, vm_ctx_id: u64),
+        >;
+
+        // ckb_x64_simulator::run_native_simulator(sim_path);
+        unsafe {
+            let lib = libloading::Library::new(sim_path).expect("Load library");
+
+            let func: SetScriptInfo = lib
+                .get(b"__set_script_info")
+                .expect("load function : __update_spawn_info");
+            func(std::ptr::null(), 0, 0);
+
+            let func: CkbMainFunc = lib
+                .get(b"__ckb_std_main")
+                .expect("load function : __ckb_std_main");
+            let argv = vec![];
+            func(0, argv.as_ptr());
+        }
+        0
+    }
+
+    #[cfg(feature = "native-simulator")]
     pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
-        let path = std::path::PathBuf::from(path);
+        let path = PathBuf::from(path);
         assert!(path.is_file());
         self.simulator_binaries.insert(code_hash, path);
     }

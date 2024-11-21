@@ -1,0 +1,12 @@
+[package]
+name = "simple-spawn-sim"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+simple-spawn = { path = "../../contracts/simple-spawn", features = ["native-simulator"] }
+ckb-std = { version = "0.16.3", features = ["native-simulator"] }
+
+[lib]
+crate-type = ["cdylib"]
