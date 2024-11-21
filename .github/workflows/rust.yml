@@ -9,6 +9,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
+    - name: Deps
+      run: |
+        wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 18 && rm llvm.sh
+        rustup target add riscv64imac-unknown-none-elf
     - name: Install Rust components
       run: rustup component add rustfmt clippy
     - name: Check format
@@ -19,4 +23,7 @@ jobs:
       run: cargo build
     - name: Run cargo test
       run: cargo test --all
-    
+    - name: Build native-simulator test contracts
+      run: cd tests/test-contracts && make build
+    - name: Run cargo test (with native-simulator)
+      run: cargo test --features="native-simulator" --all
