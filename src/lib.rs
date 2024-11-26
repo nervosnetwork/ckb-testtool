@@ -2,8 +2,9 @@
 //!
 //! This module provides testing context for CKB contracts.
 //!
-//! To setup a contract verification context, you may need to import ckb modules
-//! to build the transaction structure or calculate the hash result.
+//! To setup a contract verification context, you may need to import ckb modules to build the transaction structure or
+//! calculate the hash result.
+//!
 //! `ckb-testtool` crate provides re-exports of ckb modules.
 //!
 //! # Example
@@ -18,24 +19,24 @@
 //! };
 //! use std::fs;
 //!
-//! // max cycles of verification
+//! // Max cycles of verification.
 //! const MAX_CYCLES: u64 = 10_000_000;
 //!
 //! #[test]
 //! fn test_basic() {
-//!     // Init testing context
+//!     // Init testing context.
 //!     let mut context = Context::default();
 //!     let contract_bin: Bytes = fs::read("my_contract").unwrap().into();
 //!
-//!     // deploy contract
+//!     // Deploy contract.
 //!     let out_point = context.deploy_cell(contract_bin);
 //!
-//!     // prepare scripts and cell dep
+//!     // Prepare scripts and cell dep.
 //!     let lock_script = context
 //!         .build_script(&out_point, Default::default())
 //!         .expect("script");
 //!
-//!     // prepare input cell
+//!     // Prepare input cell.
 //!     let input_out_point = context.create_cell(
 //!         CellOutput::new_builder()
 //!             .capacity(1000u64.pack())
@@ -47,7 +48,7 @@
 //!         .previous_output(input_out_point)
 //!         .build();
 //!
-//!     // outputs
+//!     // Outputs.
 //!     let outputs = vec![
 //!         CellOutput::new_builder()
 //!             .capacity(500u64.pack())
@@ -61,7 +62,7 @@
 //!
 //!     let outputs_data = vec![Bytes::new(); 2];
 //!
-//!     // build transaction
+//!     // Build transaction.
 //!     let tx = TransactionBuilder::default()
 //!         .input(input)
 //!         .outputs(outputs)
@@ -70,13 +71,24 @@
 //!
 //!     let tx = context.complete_tx(tx);
 //!
-//!     // run
+//!     // Run.
 //!     let cycles = context
 //!         .verify_tx(&tx, MAX_CYCLES)
 //!         .expect("pass verification");
 //!     println!("consume cycles: {}", cycles);
 //! }
 //! ```
+//!
+//! The `ckb-testtool` also supports native simulation. To use this mode, you need to enable the `native-simulator`
+//! feature. Next, you should create a new native simulation project. In the new project, you only need to add one
+//! line in main.rs:
+//!
+//! ```text
+//! ckb_std::entry_simulator!(script::program_entry);
+//! ```
+//!
+//! Recompile it. ckb-testtool will automatically locate it in the contract search path. You can refer to path
+//! `tests/test-contracts/native-simulators/simple-spawn-sim` for relevant examples.
 
 pub mod builtin;
 pub mod context;
