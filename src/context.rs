@@ -7,7 +7,7 @@ use ckb_traits::{CellDataProvider, ExtensionProvider, HeaderProvider};
 use ckb_types::{
     bytes::Bytes,
     core::{
-        cell::{CellMeta, CellMetaBuilder, ResolvedTransaction},
+        cell::{CellMetaBuilder, ResolvedTransaction},
         hardfork::{HardForks, CKB2021, CKB2023},
         Capacity, Cycle, DepType, EpochExt, HeaderBuilder, HeaderView, ScriptHashType,
         TransactionInfo, TransactionView,
@@ -17,10 +17,11 @@ use ckb_types::{
 };
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use std::collections::HashMap;
+use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// Return a random hash
+/// Return a random hash.
 pub fn random_hash() -> Byte32 {
     let mut rng = thread_rng();
     let mut buf = [0u8; 32];
@@ -28,12 +29,12 @@ pub fn random_hash() -> Byte32 {
     buf.pack()
 }
 
-/// Return a random OutPoint
+/// Return a random OutPoint.
 pub fn random_out_point() -> OutPoint {
     OutPoint::new_builder().tx_hash(random_hash()).build()
 }
 
-/// Return a random Type ID Script
+/// Return a random Type ID Script.
 pub fn random_type_id_script() -> Script {
     let args = random_hash().as_bytes();
     debug_assert_eq!(args.len(), 32);
@@ -44,13 +45,16 @@ pub fn random_type_id_script() -> Script {
         .build()
 }
 
+/// A single debug message. By setting context.capture_debug, you can capture debug syscalls issued by your script.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Message {
+    /// The current script hash.
     pub id: Byte32,
+    /// Payload.
     pub message: String,
 }
 
-/// Verification Context
+/// Verification Context.
 #[derive(Clone)]
 pub struct Context {
     pub cells: HashMap<OutPoint, (CellOutput, Bytes)>,
@@ -72,10 +76,9 @@ pub struct Context {
 
 impl Default for Context {
     fn default() -> Self {
-        use std::env;
-        // Get from $TOP/build/$MODE
+        // The search directory for scripts is $TOP/build/$MODE. You can change this path by setting the $TOP and $MODE
+        // environment variables. If you do nothing, the default path is ../build/release.
         let mut contracts_dir = env::var("TOP").map(PathBuf::from).unwrap_or_default();
-
         contracts_dir.push("build");
         if !contracts_dir.exists() {
             contracts_dir.pop();
@@ -104,28 +107,25 @@ impl Default for Context {
 }
 
 impl Context {
-    /// Create a new context with a deterministic random number generator, which can be used to generate deterministic out point of deployed contract
+    /// Create a new context with a deterministic random number generator, which can be used to generate deterministic
+    /// out point of deployed contract.
     pub fn new_with_deterministic_rng() -> Self {
         Self {
             deterministic_rng: true,
             ..Default::default()
         }
     }
+
+    /// Add new script search paths. Note that this does not replace the default search paths.
     pub fn add_contract_dir(&mut self, path: &str) {
         self.contracts_dirs.push(path.into());
     }
 
-    #[deprecated(since = "0.1.1", note = "Please use the deploy_cell function instead")]
-    pub fn deploy_contract(&mut self, data: Bytes) -> OutPoint {
-        self.deploy_cell(data)
-    }
-
-    /// Deploy a cell
-    /// return the out-point of the cell
+    /// Deploy a cell.
     pub fn deploy_cell(&mut self, data: Bytes) -> OutPoint {
         let data_hash = CellOutput::calc_data_hash(&data);
         if let Some(out_point) = self.cells_by_data_hash.get(&data_hash) {
-            // contract has been deployed
+            // Contract has already been deployed.
             return out_point.to_owned();
         }
         let (out_point, type_id_script) = if self.deterministic_rng {
@@ -162,6 +162,8 @@ impl Context {
         out_point
     }
 
+    /// Deploy a cell by filename. It provides the same functionality as the deploy_cell function, but looks for data
+    /// in the file system.
     pub fn deploy_cell_by_name(&mut self, filename: &str) -> OutPoint {
         let path = self.get_contract_path(filename).expect("get contract path");
         let data = std::fs::read(&path).unwrap_or_else(|_| panic!("read local file: {:?}", path));
@@ -179,6 +181,7 @@ impl Context {
         self.deploy_cell(data.into())
     }
 
+    /// Get the full path of the specified script.
     fn get_contract_path(&self, filename: &str) -> Option<PathBuf> {
         for dir in &self.contracts_dirs {
             let path = dir.join(filename);
@@ -186,11 +189,11 @@ impl Context {
                 return Some(path);
             }
         }
-
         None
     }
 
     #[cfg(feature = "native-simulator")]
+    /// Get the full path of the specified script. Only useful in simulator mode.
     fn get_native_simulator_path(&self, filename: &str) -> Option<PathBuf> {
         let cdylib_name = format!(
             "{}.{}",
@@ -207,13 +210,12 @@ impl Context {
         None
     }
 
-    /// Insert a block header into context
+    /// Insert a block header into context. Afterwards, the header can be retrieved by its hash.
     pub fn insert_header(&mut self, header: HeaderView) {
         self.headers.insert(header.hash(), header);
     }
 
-    /// Link a cell with a block
-    /// to make the load_header_by_cell syscalls works
+    /// Link a cell with a block to make the load_header_by_cell syscalls works.
     pub fn link_cell_with_block(
         &mut self,
         out_point: OutPoint,
@@ -230,29 +232,19 @@ impl Context {
         );
     }
 
-    #[deprecated(
-        since = "0.1.1",
-        note = "Please use the get_cell_by_data_hash function instead"
-    )]
-    pub fn get_contract_out_point(&self, data_hash: &Byte32) -> Option<OutPoint> {
-        self.get_cell_by_data_hash(data_hash)
-    }
-
-    /// Get the out-point of a cell by data_hash
-    /// the cell must has deployed to this context
+    /// Get the out-point of a cell by data_hash. The cell must has deployed to this context.
     pub fn get_cell_by_data_hash(&self, data_hash: &Byte32) -> Option<OutPoint> {
         self.cells_by_data_hash.get(data_hash).cloned()
     }
 
-    /// Create a cell with data
-    /// return the out-point
+    /// Create a cell with data.
     pub fn create_cell(&mut self, cell: CellOutput, data: Bytes) -> OutPoint {
         let out_point = random_out_point();
         self.create_cell_with_out_point(out_point.clone(), cell, data);
         out_point
     }
 
-    /// Create cell with specified out-point and cell data
+    /// Create cell with specified out-point and cell data.
     pub fn create_cell_with_out_point(
         &mut self,
         out_point: OutPoint,
@@ -268,21 +260,12 @@ impl Context {
         self.cells.insert(out_point, (cell, data));
     }
 
-    #[deprecated(
-        since = "0.1.1",
-        note = "Please use the create_cell_with_out_point function instead"
-    )]
-    pub fn insert_cell(&mut self, out_point: OutPoint, cell: CellOutput, data: Bytes) {
-        self.create_cell_with_out_point(out_point, cell, data)
-    }
-
-    /// Get cell output and data by out-point
+    /// Get cell output and data by out-point.
     pub fn get_cell(&self, out_point: &OutPoint) -> Option<(CellOutput, Bytes)> {
         self.cells.get(out_point).cloned()
     }
 
-    /// Build script with out_point, hash_type, args
-    /// return none if the out-point is not exist
+    /// Build script with out_point, hash_type, args. Return none if the out-point is not exist.
     pub fn build_script_with_hash_type(
         &mut self,
         out_point: &OutPoint,
@@ -308,12 +291,14 @@ impl Context {
                 .build(),
         )
     }
-    /// Build script with out_point, args and hash_type(ScriptHashType::Type)
-    /// return none if the out-point is not exist
+
+    /// Build script with out_point, args and hash_type(ScriptHashType::Type). Return none if the out-point is not
+    /// exist.
     pub fn build_script(&mut self, out_point: &OutPoint, args: Bytes) -> Option<Script> {
         self.build_script_with_hash_type(out_point, ScriptHashType::Type, args)
     }
 
+    /// Find cell dep for the specified script.
     fn find_cell_dep_for_script(&self, script: &Script) -> CellDep {
         let out_point = match ScriptHashType::try_from(u8::from(script.hash_type()))
             .expect("invalid script hash type")
@@ -334,8 +319,8 @@ impl Context {
             .build()
     }
 
-    /// Complete cell deps for a transaction
-    /// this function searches context cells; generate cell dep for referenced scripts.
+    /// Complete cell deps for a transaction.
+    /// This function searches context cells; generate cell dep for referenced scripts.
     pub fn complete_tx(&mut self, tx: TransactionView) -> TransactionView {
         let mut cell_deps: Vec<CellDep> = Vec::new();
 
@@ -373,6 +358,7 @@ impl Context {
             .build()
     }
 
+    /// Build transaction with resolved input cells.
     fn build_resolved_tx(&self, tx: &TransactionView) -> ResolvedTransaction {
         let input_cells = tx
             .inputs()
@@ -439,27 +425,28 @@ impl Context {
         }
     }
 
-    // check format and consensus rules
+    /// Check format and consensus rules.
     fn verify_tx_consensus(&self, tx: &TransactionView) -> Result<(), CKBError> {
         OutputsDataVerifier::new(tx).verify()?;
         Ok(())
     }
 
+    /// Return capture_debug flag.
     pub fn capture_debug(&self) -> bool {
         self.capture_debug
     }
 
-    /// Capture debug output, default value is false
+    /// Capture debug output, default value is false.
     pub fn set_capture_debug(&mut self, capture_debug: bool) {
         self.capture_debug = capture_debug;
     }
 
-    /// return captured messages
+    /// Return captured messages.
     pub fn captured_messages(&self) -> Vec<Message> {
         self.captured_messages.lock().unwrap().clone()
     }
 
-    /// Verify the transaction in CKB-VM
+    /// Verify the transaction in CKB-VM.
     pub fn verify_tx(&self, tx: &TransactionView, max_cycles: u64) -> Result<Cycle, CKBError> {
         self.verify_tx_consensus(tx)?;
         let resolved_tx = self.build_resolved_tx(tx);
@@ -501,6 +488,7 @@ impl Context {
     }
 
     #[cfg(feature = "native-simulator")]
+    /// Verify the transaction in simulator mode.
     fn native_simulator_verify<DL>(
         &self,
         tx: &TransactionView,
@@ -545,6 +533,7 @@ impl Context {
     }
 
     #[cfg(feature = "native-simulator")]
+    /// Run simulator.
     fn run_simulator(
         &self,
         sim_path: &PathBuf,
@@ -634,13 +623,14 @@ impl Context {
     }
 
     #[cfg(feature = "native-simulator")]
+    /// Add code_hash and script binary to simulator.
     pub fn set_simulator(&mut self, code_hash: Byte32, path: &str) {
         let path = PathBuf::from(path);
         assert!(path.is_file());
         self.simulator_binaries.insert(code_hash, path);
     }
 
-    /// Dump the transaction in mock transaction format, so we can offload it to ckb debugger
+    /// Dump the transaction in mock transaction format, so we can offload it to ckb debugger.
     pub fn dump_tx(&self, tx: &TransactionView) -> Result<ReprMockTransaction, CKBError> {
         let rtx = self.build_resolved_tx(tx);
         let mut inputs = Vec::with_capacity(rtx.resolved_inputs.len());
@@ -701,14 +691,6 @@ impl Context {
 }
 
 impl CellDataProvider for Context {
-    // load Cell Data
-    fn load_cell_data(&self, cell: &CellMeta) -> Option<Bytes> {
-        cell.mem_cell_data
-            .as_ref()
-            .map(|data| Bytes::from(data.to_vec()))
-            .or_else(|| self.get_cell_data(&cell.out_point))
-    }
-
     fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
         self.cells
             .get(out_point)
@@ -723,7 +705,6 @@ impl CellDataProvider for Context {
 }
 
 impl HeaderProvider for Context {
-    // load header
     fn get_header(&self, block_hash: &Byte32) -> Option<HeaderView> {
         self.headers.get(block_hash).cloned()
     }
