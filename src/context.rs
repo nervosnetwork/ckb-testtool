@@ -15,7 +15,7 @@ use ckb_types::{
     packed::{Byte32, CellDep, CellDepBuilder, CellOutput, OutPoint, OutPointVec, Script},
     prelude::*,
 };
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{rng, rngs::StdRng, Rng, SeedableRng};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 /// Return a random hash.
 pub fn random_hash() -> Byte32 {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut buf = [0u8; 32];
     rng.fill(&mut buf);
     buf.pack()
