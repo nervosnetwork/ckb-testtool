@@ -8,7 +8,7 @@
 //!
 //! # Example
 //!
-//! ``` rust
+//! ```rust,no_run
 //! use ckb_testtool::context::Context;
 //! use ckb_testtool::ckb_types::{
 //!     bytes::Bytes,
