@@ -7,15 +7,15 @@ use ckb_traits::{CellDataProvider, ExtensionProvider, HeaderProvider};
 use ckb_types::{
     bytes::Bytes,
     core::{
-        cell::{CellMetaBuilder, ResolvedTransaction},
-        hardfork::{HardForks, CKB2021, CKB2023},
         Capacity, Cycle, DepType, EpochExt, HeaderBuilder, HeaderView, ScriptHashType,
         TransactionInfo, TransactionView,
+        cell::{CellMetaBuilder, ResolvedTransaction},
+        hardfork::{CKB2021, CKB2023, HardForks},
     },
     packed::{Byte32, CellDep, CellDepBuilder, CellOutput, OutPoint, OutPointVec, Script},
     prelude::*,
 };
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng, thread_rng};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -458,26 +458,33 @@ impl Context {
             .build();
         let tip = HeaderBuilder::default().number(0.pack()).build();
         let tx_verify_env = TxVerifyEnv::new_submit(&tip);
-        let mut verifier = TransactionScriptsVerifier::new(
-            Arc::new(resolved_tx),
-            self.clone(),
-            Arc::new(consensus),
-            Arc::new(tx_verify_env),
-        );
-        if self.capture_debug {
+        let verifier = if self.capture_debug {
             let captured_messages = self.captured_messages.clone();
-            verifier.set_debug_printer(move |id, message| {
-                let msg = Message {
-                    id: id.clone(),
-                    message: message.to_string(),
-                };
-                captured_messages.lock().unwrap().push(msg);
-            });
+            TransactionScriptsVerifier::new_with_debug_printer(
+                Arc::new(resolved_tx),
+                self.clone(),
+                Arc::new(consensus),
+                Arc::new(tx_verify_env),
+                Arc::new(move |id, message| {
+                    //
+                    let msg = Message {
+                        id: id.clone(),
+                        message: message.to_string(),
+                    };
+                    captured_messages.lock().unwrap().push(msg);
+                }),
+            )
         } else {
-            verifier.set_debug_printer(|_id, msg| {
-                println!("[contract debug] {}", msg);
-            });
-        }
+            TransactionScriptsVerifier::new_with_debug_printer(
+                Arc::new(resolved_tx),
+                self.clone(),
+                Arc::new(consensus),
+                Arc::new(tx_verify_env),
+                Arc::new(|_id, msg| {
+                    println!("[contract debug] {}", msg);
+                }),
+            )
+        };
 
         #[cfg(feature = "native-simulator")]
         {
@@ -556,7 +563,9 @@ impl Context {
             let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
             std::fs::write(&tx_file, tx_json).expect("write setup");
 
-            std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+            unsafe {
+                std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+            }
             Some(tmp_dir)
         } else {
             None
@@ -590,12 +599,16 @@ impl Context {
         let native_binaries = format!("{{ {} }}", native_binaries);
 
         let setup = format!(
-                "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": {}, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
-                group.group_type == ckb_script::ScriptGroupType::Lock,
-                group.input_indices[0], 2, native_binaries
-            );
+            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": {}, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
+            group.group_type == ckb_script::ScriptGroupType::Lock,
+            group.input_indices[0],
+            2,
+            native_binaries
+        );
         std::fs::write(&running_setup, setup).expect("write setup");
-        std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
+        unsafe {
+            std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
+        }
 
         type CkbMainFunc<'a> =
             libloading::Symbol<'a, unsafe extern "C" fn(argc: i32, argv: *const *const i8) -> i8>;
