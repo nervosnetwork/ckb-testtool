@@ -4,7 +4,7 @@ A helper library for writing CKB script test cases. It is migrated from [capsule
 
 ```toml
 [dependencies]
-ckb-testtool = "0.15"
+ckb-testtool = "0.16"
 ```
 
 ## Usage
