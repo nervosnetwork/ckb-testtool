@@ -3,11 +3,11 @@ use ckb_hash::{blake2b_256, new_blake2b};
 use ckb_system_scripts::BUNDLED_CELL;
 use ckb_testtool::{ckb_types::core::ScriptHashType, context::Context, *};
 use ckb_types::{
+    H256,
     bytes::Bytes,
     core::{TransactionBuilder, TransactionView},
     packed::{self, *},
     prelude::*,
-    H256,
 };
 
 const MAX_CYCLES: u64 = 500_0000;

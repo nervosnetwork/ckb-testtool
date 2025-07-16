@@ -563,7 +563,9 @@ impl Context {
             let tx_json = serde_json::to_string(&dump_tx).expect("dump tx to string");
             std::fs::write(&tx_file, tx_json).expect("write setup");
 
-            std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+            unsafe {
+                std::env::set_var("CKB_TX_FILE", tx_file.to_str().unwrap());
+            }
             Some(tmp_dir)
         } else {
             None
@@ -604,7 +606,9 @@ impl Context {
             native_binaries
         );
         std::fs::write(&running_setup, setup).expect("write setup");
-        std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
+        unsafe {
+            std::env::set_var("CKB_RUNNING_SETUP", running_setup.to_str().unwrap());
+        }
 
         type CkbMainFunc<'a> =
             libloading::Symbol<'a, unsafe extern "C" fn(argc: i32, argv: *const *const i8) -> i8>;
