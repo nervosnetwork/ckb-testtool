@@ -40,7 +40,7 @@ mod native_simulator_cases {
             .previous_output(
                 context.create_cell(
                     CellOutput::new_builder()
-                        .capacity(1000u64.pack())
+                        .capacity(1000)
                         .lock(lock_script.clone())
                         .build(),
                     Bytes::new(),
@@ -50,11 +50,11 @@ mod native_simulator_cases {
 
         let outputs = vec![
             CellOutput::new_builder()
-                .capacity(500u64.pack())
+                .capacity(500)
                 .lock(lock_script.clone())
                 .build(),
             CellOutput::new_builder()
-                .capacity(500u64.pack())
+                .capacity(500)
                 .lock(lock_script)
                 .build(),
         ];
