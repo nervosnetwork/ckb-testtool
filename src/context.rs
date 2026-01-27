@@ -2,6 +2,8 @@ use crate::tx_verifier::OutputsDataVerifier;
 use ckb_chain_spec::consensus::{ConsensusBuilder, TYPE_ID_CODE_HASH};
 use ckb_error::Error as CKBError;
 use ckb_mock_tx_types::{MockCellDep, MockInfo, MockInput, MockTransaction, ReprMockTransaction};
+#[cfg(feature = "native-simulator")]
+use ckb_script::ScriptError;
 use ckb_script::{TransactionScriptsVerifier, TxVerifyEnv};
 use ckb_traits::{CellDataProvider, ExtensionProvider, HeaderProvider};
 use ckb_types::{
@@ -526,7 +528,9 @@ impl Context {
             };
 
             let use_cycles = match self.simulator_binaries.get(&code_hash) {
-                Some(sim_path) => self.run_simulator(sim_path, tx, group),
+                Some(sim_path) => self
+                    .run_simulator(sim_path, tx, group)
+                    .map_err(|e| e.source(group))?,
                 None => {
                     group.script.code_hash();
                     verifier
@@ -548,7 +552,7 @@ impl Context {
         sim_path: &PathBuf,
         tx: &TransactionView,
         group: &ckb_script::ScriptGroup,
-    ) -> u64 {
+    ) -> Result<u64, ScriptError> {
         println!(
             "run native-simulator: {}",
             sim_path.file_name().unwrap().to_str().unwrap()
@@ -632,9 +636,12 @@ impl Context {
                 .get(b"__ckb_std_main")
                 .expect("load function : __ckb_std_main");
             let argv = vec![];
-            func(0, argv.as_ptr());
+            let result = func(0, argv.as_ptr());
+            if result != 0 {
+                return Err(ScriptError::validation_failure(&group.script, result));
+            }
         }
-        0
+        Ok(0)
     }
 
     #[cfg(feature = "native-simulator")]
