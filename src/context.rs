@@ -604,10 +604,21 @@ impl Context {
 
         let native_binaries = format!("{{ {} }}", native_binaries);
 
+        // For type scripts that only appear on outputs (e.g., genesis transactions),
+        // input_indices is empty. In that case, use output_indices[0] and set is_output to true.
+        let (is_output, script_index) = if !group.input_indices.is_empty() {
+            (false, group.input_indices[0])
+        } else if !group.output_indices.is_empty() {
+            (true, group.output_indices[0])
+        } else {
+            panic!("script group has no inputs or outputs");
+        };
+
         let setup = format!(
-            "{{\"is_lock_script\": {}, \"is_output\": false, \"script_index\": {}, \"vm_version\": {}, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
+            "{{\"is_lock_script\": {}, \"is_output\": {}, \"script_index\": {}, \"vm_version\": {}, \"native_binaries\": {}, \"run_type\": \"DynamicLib\" }}",
             group.group_type == ckb_script::ScriptGroupType::Lock,
-            group.input_indices[0],
+            is_output,
+            script_index,
             2,
             native_binaries
         );
