@@ -6,7 +6,9 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 simple-spawn = { path = "../../contracts/simple-spawn", features = ["native-simulator"] }
-ckb-std = { version = "1.0", features = ["native-simulator"] }
+ckb-std = { version = "1.1", features = ["native-simulator"] }
+# Forced fixation; please delete this line in the future.
+ckb-fixed-hash-core = "=1.1.0"
 
 [lib]
 crate-type = ["cdylib"]
