@@ -8,8 +8,8 @@ This document provides guidelines for AI agents working on the `ckb-testtool` co
 It provides a `Context` struct for deploying contracts, building transactions, and verifying them
 using CKB-VM. Originally migrated from [capsule](https://github.com/nervosnetwork/capsule).
 
-**Rust Edition:** 2024  
-**Rust Toolchain:** 1.85.0 (specified in `rust-toolchain`)
+**Rust Edition:** 2024
+**Rust Toolchain:** 1.92.0 (specified in `rust-toolchain`)
 
 ## Build & Test Commands
 
